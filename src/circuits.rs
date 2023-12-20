@@ -86,16 +86,31 @@ where
     }
 }
 
+// Note: since at the v0.4.0 of ark_curves the bn254 curve does not have the constraints
+// implemented, for the following tests we use the pallas curve.
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use ark_bn254::{Fr, G1Projective};
     use ark_crypto_primitives::sponge::{poseidon::PoseidonSponge, CryptographicSponge};
     use ark_ec::Group;
-    use ark_r1cs_std::{alloc::AllocVar, fields::fp::FpVar};
+    use ark_ff::{BigInteger, PrimeField};
+    use ark_r1cs_std::{
+        alloc::AllocVar,
+        boolean::Boolean,
+        fields::{fp::FpVar, nonnative::NonNativeFieldVar, FieldVar},
+        groups::GroupOpsBounds,
+        prelude::CurveVar,
+    };
     use ark_relations::r1cs::ConstraintSystem;
     use ark_std::UniformRand;
     use std::ops::Mul;
+
+    // import pallas curve
+    use ark_pallas::{Fq, Fr, Projective};
+    // instead of ark_pallas::constraints::GVar we use a custom non-native version of it:
+    use ark_pallas::PallasConfig;
+    use ark_r1cs_std::groups::curves::short_weierstrass::ProjectiveVar;
+    pub type NonNativePallasGVar = ProjectiveVar<PallasConfig, NonNativeFieldVar<Fq, Fr>>;
 
     use crate::sigmabus::SigmaProof;
     use crate::transcript::{tests::poseidon_test_config, PoseidonTranscript};
@@ -105,7 +120,7 @@ pub mod tests {
         let mut rng = ark_std::test_rng();
 
         let poseidon_config = poseidon_test_config::<Fr>();
-        let mut transcript = PoseidonTranscript::<G1Projective>::new(&poseidon_config);
+        let mut transcript = PoseidonTranscript::<Projective>::new(&poseidon_config);
 
         let x = Fr::rand(&mut rng);
 
@@ -119,7 +134,7 @@ pub mod tests {
         let r = Fr::rand(&mut rng);
         let o_h = Fr::rand(&mut rng);
 
-        let R = G1Projective::generator().mul(r);
+        let R = Projective::generator().mul(r);
 
         let mut sponge = PoseidonSponge::<Fr>::new(&poseidon_config);
         sponge.absorb(&vec![r, o_h]);
@@ -150,7 +165,7 @@ pub mod tests {
             CRHParametersVar::<Fr>::new_witness(cs.clone(), || Ok(poseidon_config)).unwrap();
 
         // GenZK
-        GenZKCircuit::<G1Projective>::check(
+        GenZKCircuit::<Projective>::check(
             &crh_params,
             cmVar,
             sVar,
@@ -162,6 +177,66 @@ pub mod tests {
         )
         .unwrap();
         assert!(cs.is_satisfied().unwrap());
-        dbg!("num_constraints={:?}", cs.num_constraints());
+        dbg!(cs.num_constraints());
+    }
+
+    // This circuit implements the x*G operation that Sigmabus proves, but here we do it in the
+    // 'naive' way, which is computing it non-natively.
+    struct NonNativeScalarMulCircuit<
+        C: CurveGroup,
+        GC: CurveVar<C, C::ScalarField>,
+        FV: FieldVar<C::BaseField, C::ScalarField>,
+    > {
+        _gc: PhantomData<GC>,
+        _fv: PhantomData<FV>,
+        pub x: C::ScalarField,
+        pub X: C,
+    }
+    impl<C, GC, FV> ConstraintSynthesizer<CF<C>> for NonNativeScalarMulCircuit<C, GC, FV>
+    where
+        C: CurveGroup,
+        GC: CurveVar<C, C::ScalarField>,
+        FV: FieldVar<C::BaseField, C::ScalarField>,
+        for<'a> &'a GC: GroupOpsBounds<'a, C, GC>,
+    {
+        fn generate_constraints(
+            self,
+            cs: ConstraintSystemRef<CF<C>>,
+        ) -> Result<(), SynthesisError> {
+            let G = GC::new_constant(cs.clone(), C::generator())?;
+            let x_bits = Vec::<Boolean<CF<C>>>::new_input(cs.clone(), || {
+                Ok(self.x.into_bigint().to_bits_le())
+            })?;
+            let X = GC::new_input(cs.clone(), || Ok(self.X))?;
+
+            let xG = G.scalar_mul_le(x_bits.iter())?;
+            xG.enforce_equal(&X)?;
+
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_nonnative_num_constraints() {
+        let mut rng = ark_std::test_rng();
+
+        // compute X = x * G
+        let x = Fr::rand(&mut rng);
+        let X = Projective::generator().mul(x);
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let nonnative_scalarmul_circuit = NonNativeScalarMulCircuit::<
+            Projective,
+            NonNativePallasGVar,
+            NonNativeFieldVar<Fq, Fr>,
+        > {
+            _gc: PhantomData,
+            _fv: PhantomData,
+            x,
+            X,
+        };
+
+        assert!(cs.is_satisfied().unwrap());
+        dbg!(cs.num_constraints());
     }
 }
