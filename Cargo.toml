@@ -18,6 +18,12 @@ ark-relations = { version = "^0.4.0", default-features = false }
 ark-snark = { version = "^0.4.0", default-features = false }
 ark-groth16 = { version = "^0.4.0" }
 thiserror = "1.0"
+criterion = "0.5.1"
+ark-curve25519 = "0.4.0"
 
 [dev-dependencies]
 ark-bn254 = "0.4.0"
+
+[[bench]]
+harness = false
+name = "bench_prove"

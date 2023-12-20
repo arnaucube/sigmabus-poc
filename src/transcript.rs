@@ -56,13 +56,11 @@ fn prepare_point<C: CurveGroup>(p: &C) -> Vec<C::ScalarField> {
     ]
 }
 
-#[cfg(test)]
 pub mod tests {
     use super::*;
     use ark_crypto_primitives::sponge::poseidon::find_poseidon_ark_and_mds;
 
     /// WARNING the method poseidon_test_config is for tests only
-    #[cfg(test)]
     pub fn poseidon_test_config<F: PrimeField>() -> PoseidonConfig<F> {
         let full_rounds = 8;
         let partial_rounds = 31;
